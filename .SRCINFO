@@ -1,0 +1,37 @@
+pkgbase = tweaks-for-cachyos-git
+	pkgdesc = Development version of a terminal interface for reversible CachyOS system tweaks
+	pkgver = 0.1.0.r1
+	pkgrel = 1
+	url = https://github.com/cjkubler/cachyos-tweaks
+	arch = x86_64
+	arch = aarch64
+	license = MIT
+	checkdepends = shellcheck
+	makedepends = git
+	makedepends = go
+	depends = bash
+	depends = coreutils
+	depends = gawk
+	depends = grep
+	depends = pacman
+	depends = pam
+	depends = procps-ng
+	depends = sed
+	depends = sudo
+	depends = systemd
+	depends = util-linux
+	optdepends = gcc: compile the optional U2F enrollment verifier
+	optdepends = iw: inspect and configure wireless regulatory domains
+	optdepends = libfido2: detect connected FIDO2/U2F authenticators
+	optdepends = networkmanager: apply NetworkManager-specific power settings
+	optdepends = pam-u2f: enable U2F authentication
+	optdepends = pciutils: hardware detection and eGPU diagnostics
+	optdepends = snapper: automatic and manual system snapshots
+	optdepends = usbutils: USB device diagnostics
+	provides = tweaks-for-cachyos=0.1.0.r1
+	conflicts = tweaks-for-cachyos
+	options = !debug
+	source = cachyos-tweaks::git+https://github.com/cjkubler/cachyos-tweaks.git#branch=main
+	sha256sums = SKIP
+
+pkgname = tweaks-for-cachyos-git

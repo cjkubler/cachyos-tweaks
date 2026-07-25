@@ -1,0 +1,8 @@
+build/
+pkg/
+src/
+*.pkg.tar.*
+*.src.tar.*
+tui/tui
+coverage.out
+docs/private/

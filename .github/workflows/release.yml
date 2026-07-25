@@ -1,0 +1,56 @@
+# Build static TUI binaries and attach them to a GitHub release whenever a
+# semantic version tag (vMAJOR.MINOR.PATCH) is pushed. `./tweaks.sh get-tui`
+# downloads from here.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install --yes shellcheck libpam0g-dev
+      - name: Validate release source
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
+          make check
+      - name: Build static binaries
+        run: |
+          cd tui
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath -ldflags='-s -w' -o "../tweaks-tui-linux-$arch" .
+          done
+          cd ..
+      - name: Package self-contained releases
+        run: |
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct)
+          for arch in amd64 arm64; do
+            bash scripts/package-release.sh \
+              "$GITHUB_REF_NAME" "$arch" "tweaks-tui-linux-$arch" .
+          done
+          sha256sum tweaks-tui-linux-* tweaks-for-cachyos-*.tar.gz > SHA256SUMS
+          smoke_dir=$(mktemp -d)
+          tar -C "$smoke_dir" -xzf "tweaks-for-cachyos-${GITHUB_REF_NAME#v}-linux-amd64.tar.gz"
+          "$smoke_dir/tweaks-for-cachyos-${GITHUB_REF_NAME#v}-linux-amd64/build/tweaks-tui" --help
+          "$smoke_dir/tweaks-for-cachyos-${GITHUB_REF_NAME#v}-linux-amd64/tweaks.sh" --help
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        with:
+          files: |
+            tweaks-for-cachyos-*.tar.gz
+            tweaks-tui-linux-amd64
+            tweaks-tui-linux-arm64
+            SHA256SUMS
+          generate_release_notes: true

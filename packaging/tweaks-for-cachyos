@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+export CACHYOS_TWEAKS_PROGRAM=tweaks-for-cachyos
+export CACHYOS_TWEAKS_COMMAND=tweaks-for-cachyos
+export CACHYOS_TWEAKS_PACKAGED=1
+exec /usr/lib/tweaks-for-cachyos/tweaks.sh "$@"

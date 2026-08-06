@@ -16,6 +16,7 @@ type keyMap struct {
 	AllOff   key.Binding
 	Refresh  key.Binding
 	Snapshot key.Binding
+	Update   key.Binding
 	About    key.Binding
 	Category key.Binding
 	Read     key.Binding
@@ -72,6 +73,10 @@ func newKeyMap() keyMap {
 		Snapshot: key.NewBinding(
 			key.WithKeys("s"),
 			key.WithHelp("s", "snapshot"),
+		),
+		Update: key.NewBinding(
+			key.WithKeys("u"),
+			key.WithHelp("u", "update suite"),
 		),
 		About: key.NewBinding(
 			key.WithKeys("i"),
@@ -158,7 +163,7 @@ func (k keyMap) forScreen(scr screen, modal bool) helpBindings {
 	default:
 		return helpBindings{
 			short: []key.Binding{k.Up, k.Down, k.Open, k.Snapshot, k.About, k.Help},
-			full:  [][]key.Binding{{k.Up, k.Down, k.Open}, {k.Snapshot, k.About, k.Refresh, k.Help, k.Quit}},
+			full:  [][]key.Binding{{k.Up, k.Down, k.Open}, {k.Snapshot, k.Update, k.About, k.Refresh, k.Help, k.Quit}},
 		}
 	}
 }

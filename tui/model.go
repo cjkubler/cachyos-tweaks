@@ -56,15 +56,72 @@ type button struct {
 }
 
 type captureRequest struct {
+	title      string
+	args       []string
+	input      string
+	env        []string
+	privileged bool
+	refresh    bool
+	prompt     *promptSpec // non-nil: collect one input line before running
+	tabbed     bool
+	cancelable bool
+}
+
+// promptSpec describes the single line of input a backend request needs
+// before it can run. The validated value reaches the backend as envVar=value.
+type promptSpec struct {
 	title       string
-	args        []string
-	input       string
-	env         []string
-	privileged  bool
-	refresh     bool
-	needsRegdom bool
-	tabbed      bool
-	cancelable  bool
+	heading     string
+	detail      string
+	hint        string
+	inputPrompt string
+	placeholder string
+	envVar      string
+	charLimit   int
+	initial     string
+	validate    func(string) (value, problem string)
+}
+
+func regdomPrompt() *promptSpec {
+	return &promptSpec{
+		title:       "Wi-Fi regulatory domain",
+		heading:     "Choose the wireless country code",
+		detail:      "This controls the permitted Wi-Fi channels and transmit limits.",
+		hint:        "Use the two-letter ISO code for your current country.",
+		inputPrompt: "Country code › ",
+		placeholder: "US",
+		envVar:      "CACHYOS_TWEAKS_REGDOM",
+		charLimit:   2,
+		initial:     currentRegdom(),
+		validate: func(raw string) (string, string) {
+			value := strings.ToUpper(strings.TrimSpace(raw))
+			if len(value) != 2 || value[0] < 'A' || value[0] > 'Z' ||
+				value[1] < 'A' || value[1] > 'Z' {
+				return "", "Enter a two-letter ISO country code."
+			}
+			return value, ""
+		},
+	}
+}
+
+// extraPrompt adapts a backend-declared action prompt: the backend owns the
+// wording and the validation; the frontend only refuses an empty value.
+func extraPrompt(label, heading string) *promptSpec {
+	return &promptSpec{
+		title:       label,
+		heading:     heading,
+		hint:        "The action validates the value and reports any problem.",
+		inputPrompt: "› ",
+		envVar:      "CACHYOS_TWEAKS_EXTRA_INPUT",
+		charLimit:   512,
+		validate: func(raw string) (string, string) {
+			value := strings.TrimSpace(raw)
+			if value == "" {
+				return "", "Enter a value first."
+			}
+			return value, ""
+		},
+	}
 }
 
 type outputTab struct {
@@ -148,6 +205,7 @@ type model struct {
 	configPrompt bool
 	configInput  textinput.Model
 	configError  string
+	configSpec   *promptSpec
 
 	// Offline document center. Glamour renders the selected source into its
 	// own viewport whenever the terminal width or active topic changes.
@@ -469,7 +527,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.w, m.h = msg.Width, msg.Height
 		m.help.Width = msg.Width
 		m.authInput.Width = minInt(maxInt(msg.Width-24, 16), 48)
-		m.configInput.Width = minInt(maxInt(msg.Width-24, 16), 24)
+		m.configInput.Width = minInt(maxInt(msg.Width-24, 16), 48)
 		m.hover = -1
 		m.hoverBtn = -1
 		m.docHover = -1
@@ -947,10 +1005,15 @@ func (m *model) requestBackend(request captureRequest) (tea.Model, tea.Cmd) {
 	m.modalTabHover = -1
 	m.pendingCapture = &request
 	m.hoverBtn = -1
-	if request.needsRegdom {
+	if request.prompt != nil {
+		spec := request.prompt
 		m.configPrompt = true
 		m.configError = ""
-		m.configInput.SetValue(currentRegdom())
+		m.configSpec = spec
+		m.configInput.Prompt = spec.inputPrompt
+		m.configInput.Placeholder = spec.placeholder
+		m.configInput.CharLimit = spec.charLimit
+		m.configInput.SetValue(spec.initial)
 		m.configInput.Focus()
 		return m, textinput.Blink
 	}
@@ -984,6 +1047,7 @@ func (m *model) cancelPendingAction() {
 	m.pendingCapture = nil
 	m.configPrompt = false
 	m.configError = ""
+	m.configSpec = nil
 	m.configInput.SetValue("")
 	m.authPrompt = false
 	m.authChecking = false
@@ -1059,20 +1123,21 @@ func (m *model) onAuthMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) submitConfiguration() (tea.Model, tea.Cmd) {
-	value := strings.ToUpper(strings.TrimSpace(m.configInput.Value()))
-	if len(value) != 2 || value[0] < 'A' || value[0] > 'Z' ||
-		value[1] < 'A' || value[1] > 'Z' {
-		m.configError = "Enter a two-letter ISO country code."
-		return m, nil
-	}
-	if m.pendingCapture == nil {
+	spec := m.configSpec
+	if spec == nil || m.pendingCapture == nil {
 		m.cancelPendingAction()
 		return m, nil
 	}
-	m.pendingCapture.env = append(m.pendingCapture.env, "CACHYOS_TWEAKS_REGDOM="+value)
-	m.pendingCapture.needsRegdom = false
+	value, problem := spec.validate(m.configInput.Value())
+	if problem != "" {
+		m.configError = problem
+		return m, nil
+	}
+	m.pendingCapture.env = append(m.pendingCapture.env, spec.envVar+"="+value)
+	m.pendingCapture.prompt = nil
 	m.configPrompt = false
 	m.configError = ""
+	m.configSpec = nil
 	m.configInput.SetValue("")
 	m.configInput.Blur()
 	return m.authorizePending()
@@ -1373,10 +1438,14 @@ func (m *model) activate(i int) (tea.Model, tea.Cmd) {
 			m.note = "not available right now — see the description"
 			return m, nil
 		}
+		var prompt *promptSpec
+		if r.extra.Prompt != "" {
+			prompt = extraPrompt(r.extra.Label, r.extra.Prompt)
+		}
 		return m.requestBackend(captureRequest{
 			title: r.extra.Label, args: []string{"extra", r.extra.Module, r.extra.ID},
 			privileged: r.extra.NeedsRoot, refresh: !r.extra.Capture, tabbed: r.extra.Tabbed,
-			cancelable: r.extra.Capture,
+			cancelable: r.extra.Capture, prompt: prompt,
 		})
 	}
 	return m, nil
@@ -1465,17 +1534,17 @@ func (m *model) onKey(k string) (tea.Model, tea.Cmd) {
 		case "enter", "y":
 			m.scr = scrModule
 			input := strings.Join(m.confirmOps, "\n") + "\n"
-			needsRegdom := false
+			var prompt *promptSpec
 			for _, op := range m.confirmOps {
 				fields := strings.Split(op, "\t")
 				if len(fields) == 3 && fields[1] == "wifi-regdom" && fields[2] == "on" {
-					needsRegdom = true
+					prompt = regdomPrompt()
 				}
 			}
 			m.keepStaged = nil
 			return m.requestBackend(captureRequest{
 				title: "Apply staged changes", args: []string{"batch"},
-				input: input, privileged: true, refresh: true, needsRegdom: needsRegdom,
+				input: input, privileged: true, refresh: true, prompt: prompt,
 			})
 		case "esc", "n", "q", "left", "h":
 			m.scr = scrModule
@@ -1517,6 +1586,18 @@ func (m *model) onKey(k string) (tea.Model, tea.Cmd) {
 		case "i":
 			m.openDocuments()
 			return m, nil
+		case "u":
+			if !portableInstall() {
+				m.note = "updates for this installation are managed by pacman or git"
+				return m, nil
+			}
+			// The update swaps the version behind the running process, so
+			// keep it captured without a refresh and let a restart pick the
+			// new version up.
+			return m.requestBackend(captureRequest{
+				title: "Update Tweaks for CachyOS", args: []string{"update"},
+				cancelable: true,
+			})
 		case "q", "esc":
 			return m, tea.Quit
 		default:

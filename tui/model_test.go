@@ -775,6 +775,82 @@ func TestRefreshClearsOnlyStaleStagedIntent(t *testing.T) {
 	}
 }
 
+func TestPromptedExtraCollectsInputBeforeRunning(t *testing.T) {
+	m := newModel()
+	m.w, m.h = 80, 20
+	m.mod = &Module{
+		Name: "system",
+		Extras: []Extra{{
+			Module: "system", ID: "ssh-import-keys", Label: "Add authorized keys",
+			Capture: true, NeedsRoot: false,
+			Prompt: "GitHub username — or gitlab:USER, an https:// URL, or a public key line",
+		}},
+	}
+	m.suite = &Suite{Host: "host", Kernel: "kernel", Modules: []*Module{m.mod}}
+	m.buildRows()
+
+	_, cmd := m.activate(1) // row 0 is the actions separator
+	if cmd == nil || !m.configPrompt || m.configSpec == nil || m.pendingCapture == nil {
+		t.Fatal("prompted action did not open its input prompt")
+	}
+	if m.modalRunning {
+		t.Fatal("prompted action started before its input was collected")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "GitHub username") {
+		t.Fatalf("prompt view does not show the backend wording: %q", view)
+	}
+
+	m.configInput.SetValue("   ")
+	_, _ = m.submitConfiguration()
+	if m.configError == "" || !m.configPrompt {
+		t.Fatal("blank input was accepted")
+	}
+
+	request := m.pendingCapture
+	m.configInput.SetValue("  octocat ")
+	_, cmd = m.submitConfiguration()
+	if cmd == nil || m.configPrompt || !m.modal || !m.modalRunning {
+		t.Fatal("valid input did not start the unprivileged action")
+	}
+	found := false
+	for _, env := range request.env {
+		if env == "CACHYOS_TWEAKS_EXTRA_INPUT=octocat" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("collected input did not reach the backend environment: %#v", request.env)
+	}
+}
+
+func TestMainMenuUpdateRunsOnlyOnPortableInstalls(t *testing.T) {
+	m := newModel()
+	m.w, m.h = 80, 20
+	m.scr = scrMain
+	m.suite = &Suite{Host: "host", Kernel: "kernel", Modules: []*Module{testModule(1)}}
+
+	t.Setenv("CACHYOS_TWEAKS_PORTABLE_ROOT", "")
+	_, cmd := m.onKey("u")
+	if cmd != nil || m.modal || m.pendingCapture != nil || m.note == "" {
+		t.Fatal("non-portable install offered a self-update")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "[ Update ]") {
+		t.Fatalf("main menu does not render the update control: %q", view)
+	}
+
+	t.Setenv("CACHYOS_TWEAKS_PORTABLE_ROOT", t.TempDir())
+	_, cmd = m.onKey("u")
+	if cmd == nil || !m.modal || !m.modalRunning ||
+		m.modalTitle != "Update Tweaks for CachyOS" {
+		t.Fatal("portable install did not start the update from the main menu")
+	}
+	if m.authPrompt || m.captureRefresh {
+		t.Fatal("suite update requested privilege or a state refresh it does not need")
+	}
+}
+
 func TestDocumentsRejectSymlinkEscapesAndOversizeFiles(t *testing.T) {
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.md")

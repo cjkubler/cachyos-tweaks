@@ -80,12 +80,15 @@ EOF
 #   MOD_tg_toggleable IDX   0/1
 #   MOD_tg_extra_build      optional: fill EX_IDS EX_LABELS EX_DESC
 #                           (EX_CAPTURE[i]=1 = output-only action;
-#                           EX_PRIVILEGED[i]=0 = safe without root)
+#                           EX_PRIVILEGED[i]=0 = safe without root;
+#                           EX_PROMPT[i] non-empty = the frontend collects one
+#                           line of input first and passes it to the action as
+#                           CACHYOS_TWEAKS_EXTRA_INPUT)
 #   MOD_tg_extra_run EXID   run an immediate action
 # ---------------------------------------------------------------------------
 
 declare -a TG_IDS=() TG_LABELS=() TG_STATUS=() TG_DESC=() TG_GROUPS=() TG_CATEGORIES=()
-declare -a EX_IDS=() EX_LABELS=() EX_DESC=() EX_DISABLED=() EX_CAPTURE=() EX_PRIVILEGED=() EX_TABBED=()
+declare -a EX_IDS=() EX_LABELS=() EX_DESC=() EX_DISABLED=() EX_CAPTURE=() EX_PRIVILEGED=() EX_TABBED=() EX_PROMPT=()
 
 # ---------------------------------------------------------------------------
 # U2F adapter
@@ -287,14 +290,14 @@ dump_module() {
             "${TG_STATUS[i]}" "$toggleable" "${TG_DESC[i]}" "${TG_GROUPS[i]:-}" \
             "${TG_CATEGORIES[i]:-}"
     done
-    EX_IDS=() EX_LABELS=() EX_DESC=() EX_DISABLED=() EX_CAPTURE=() EX_PRIVILEGED=() EX_TABBED=()
+    EX_IDS=() EX_LABELS=() EX_DESC=() EX_DISABLED=() EX_CAPTURE=() EX_PRIVILEGED=() EX_TABBED=() EX_PROMPT=()
     if declare -F "${adapter}_tg_extra_build" >/dev/null; then
         "${adapter}_tg_extra_build"
     fi
     for i in "${!EX_IDS[@]}"; do
         dump_record EXTRA "$name" "${EX_IDS[i]}" "${EX_LABELS[i]}" \
             "${EX_DISABLED[i]:-0}" "${EX_CAPTURE[i]:-0}" "${EX_DESC[i]}" \
-            "${EX_PRIVILEGED[i]:-1}" "${EX_TABBED[i]:-0}"
+            "${EX_PRIVILEGED[i]:-1}" "${EX_TABBED[i]:-0}" "${EX_PROMPT[i]:-}"
     done
 }
 
@@ -416,7 +419,7 @@ batch_execute() {
 
 extra_run() {
     local mod=$1 exid=$2 i found=-1
-    EX_IDS=() EX_LABELS=() EX_DESC=() EX_DISABLED=() EX_CAPTURE=() EX_PRIVILEGED=() EX_TABBED=()
+    EX_IDS=() EX_LABELS=() EX_DESC=() EX_DISABLED=() EX_CAPTURE=() EX_PRIVILEGED=() EX_TABBED=() EX_PROMPT=()
     if [[ "$mod" == u2f ]]; then
         u2f_tg_build
         u2f_tg_extra_build
@@ -529,6 +532,12 @@ esac
 require_cachyos
 if (( EUID != 0 )) && [[ ${CACHYOS_TWEAKS_UNPRIVILEGED:-0} != 1 ]]; then
     command -v sudo >/dev/null || die 'run as root'
+    # Action input must survive self-elevation for CLI invocations like
+    # CACHYOS_TWEAKS_EXTRA_INPUT=... ./tweaks.sh extra system ssh-import-keys.
+    if [[ -n ${CACHYOS_TWEAKS_EXTRA_INPUT:-} ]]; then
+        exec sudo -- env "CACHYOS_TWEAKS_EXTRA_INPUT=$CACHYOS_TWEAKS_EXTRA_INPUT" \
+            "$SUITE_DIR/$SCRIPT_NAME" "$@"
+    fi
     exec sudo -- "$SUITE_DIR/$SCRIPT_NAME" "$@"
 fi
 if (( EUID == 0 )); then

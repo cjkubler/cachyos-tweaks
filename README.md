@@ -21,7 +21,8 @@ This installs entirely below your home directory and provides the
 database. The application requests administrator authorization only when a
 system change needs it.
 
-Update from the General OS actions in the TUI or from a terminal:
+Update from the main screen of the TUI (`u` or the Update button) or from a
+terminal:
 
 ```bash
 tweaks-for-cachyos update
@@ -93,6 +94,7 @@ compact terminals to centered two-pane dashboards on wide displays.
 - Enter stages a setting or runs an action.
 - `a` reviews and confirms staged changes.
 - `s` reviews and confirms a standalone snapshot.
+- `u` updates a portable installation from the main screen.
 - `i` opens the offline help center.
 - `?` shows the complete shortcut list.
 - Mouse movement softly highlights clickable rows and controls.
@@ -138,6 +140,9 @@ Module documentation lives beside the code it explains:
 | Category | Topic |
 | --- | --- |
 | General OS | [Memory and swap](modules/system/memory/README.md) |
+| General OS | [Remote access (SSH)](modules/system/remote/README.md) |
+| General OS | [Magic SysRq keys](modules/system/kernel/README.md) |
+| General OS | [Storage maintenance](modules/system/storage/README.md) |
 | Security | [U2F / FIDO2 authentication](modules/security/u2f.md) |
 | Hardware | [Framework 13](modules/devices/framework-13.md) |
 | Hardware | [Framework 16](modules/devices/framework-16.md) |
@@ -157,6 +162,9 @@ modules/
   system/
     index.sh               general OS category manifest
     memory/                memory policy and its documentation
+    remote/                OpenSSH service and hardening
+    kernel/                Magic SysRq policy
+    storage/               storage maintenance
   devices/                 model-specific policy
   hardware/                cross-device hardware tools
   security/                authentication integrations

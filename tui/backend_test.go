@@ -40,7 +40,8 @@ func TestParseDump(t *testing.T) {
 		record("MODULE", "fw13", "Framework 13") +
 		record("DOC", "fw13", "Hardware", "Framework 13", "modules/devices/framework-13.md") +
 		record("TWEAK", "fw13", "wifi", "Wi-Fi", "off", "1", "Description", "memory-policy", "Memory & swap") +
-		record("EXTRA", "fw13", "diag", "Diagnose", "0", "1", "Read only", "0", "1")
+		record("EXTRA", "fw13", "diag", "Diagnose", "0", "1", "Read only", "0", "1", "") +
+		record("EXTRA", "fw13", "import", "Import", "0", "1", "Adds a key", "0", "0", "GitHub username")
 
 	suite, err := parseDump(out)
 	if err != nil {
@@ -63,9 +64,12 @@ func TestParseDump(t *testing.T) {
 	if mod.Tweaks[0].Category != "Memory & swap" {
 		t.Fatalf("tweak category = %q", mod.Tweaks[0].Category)
 	}
-	if len(mod.Extras) != 1 || !mod.Extras[0].Capture || mod.Extras[0].NeedsRoot ||
-		!mod.Extras[0].Tabbed {
+	if len(mod.Extras) != 2 || !mod.Extras[0].Capture || mod.Extras[0].NeedsRoot ||
+		!mod.Extras[0].Tabbed || mod.Extras[0].Prompt != "" {
 		t.Fatalf("module extras = %#v", mod.Extras)
+	}
+	if mod.Extras[1].Prompt != "GitHub username" {
+		t.Fatalf("extra prompt = %q", mod.Extras[1].Prompt)
 	}
 }
 
@@ -117,6 +121,8 @@ func TestParseDumpRejectsBrokenProtocol(t *testing.T) {
 			record("TWEAK", "x", "id", "One", "off", "1", "desc", "", " Memory"),
 		"invalid boolean": record("SUITE", "0", "h", "k") + record("MODULE", "x", "X") +
 			record("EXTRA", "x", "run", "Run", "2", "1", "desc"),
+		"invalid extra prompt": record("SUITE", "0", "h", "k") + record("MODULE", "x", "X") +
+			record("EXTRA", "x", "run", "Run", "0", "1", "desc", "0", "0", "multi\nline"),
 		"extra fields": record("SUITE", "0", "h", "k", "unexpected"),
 		"noncanonical document": record("SUITE", "0", "h", "k") + record("MODULE", "x", "X") +
 			record("DOC", "x", "Hardware", "X", "modules/a/../x.md"),

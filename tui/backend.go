@@ -48,6 +48,7 @@ type Extra struct {
 	NeedsRoot bool
 	Tabbed    bool
 	Desc      string
+	Prompt    string // non-empty: collect one input line first, passed via env
 }
 
 type HelpDocument struct {
@@ -159,6 +160,12 @@ func scriptPath() string {
 
 func backendNeedsPrivilege() bool {
 	return os.Geteuid() != 0 && os.Getenv("CACHYOS_TWEAKS_DEV") == ""
+}
+
+// portableInstall reports whether this is a managed portable installation,
+// which is the only install method the suite can update itself.
+func portableInstall() bool {
+	return os.Getenv("CACHYOS_TWEAKS_PORTABLE_ROOT") != ""
 }
 
 // backendCommand keeps the Bubble Tea process unprivileged and elevates only
@@ -422,7 +429,7 @@ func parseDump(out string) (*Suite, error) {
 				Group: group, Category: category,
 			})
 		case "EXTRA":
-			if len(f) < 7 || len(f) > 9 {
+			if len(f) < 7 || len(f) > 10 {
 				return nil, fmt.Errorf("malformed EXTRA record")
 			}
 			m := byName[f[1]]
@@ -440,6 +447,9 @@ func parseDump(out string) (*Suite, error) {
 			if len(f) >= 9 && f[8] != "0" && f[8] != "1" {
 				return nil, fmt.Errorf("invalid EXTRA tab flag for module %s", f[1])
 			}
+			if len(f) >= 10 && !validExtraPrompt(f[9]) {
+				return nil, fmt.Errorf("invalid EXTRA prompt for module %s", f[1])
+			}
 			extraKey := f[1] + fieldSep + f[2]
 			if seenExtras[extraKey] {
 				return nil, fmt.Errorf("duplicate EXTRA record: %s/%s", f[1], f[2])
@@ -450,10 +460,15 @@ func parseDump(out string) (*Suite, error) {
 				needsRoot = f[7] == "1"
 			}
 			tabbed := len(f) >= 9 && f[8] == "1"
+			prompt := ""
+			if len(f) >= 10 {
+				prompt = f[9]
+			}
 			m.Extras = append(m.Extras, Extra{
 				Module: f[1], ID: f[2], Label: f[3],
 				Disabled: f[4] == "1", Capture: f[5] == "1",
 				Desc: f[6], NeedsRoot: needsRoot, Tabbed: tabbed,
+				Prompt: prompt,
 			})
 		default:
 			return nil, fmt.Errorf("unknown dump record: %q", f[0])
@@ -481,6 +496,12 @@ func validTweakCategory(category string) bool {
 	return len(category) <= 64 &&
 		category == strings.TrimSpace(category) &&
 		!strings.ContainsAny(category, "\r\n")
+}
+
+func validExtraPrompt(prompt string) bool {
+	return len(prompt) <= 200 &&
+		prompt == strings.TrimSpace(prompt) &&
+		!strings.ContainsAny(prompt, "\r\n")
 }
 
 type dumpMsg struct {

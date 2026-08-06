@@ -51,11 +51,23 @@ func (m *model) View() string {
 }
 
 func (m *model) viewConfiguration() string {
-	body := m.headerLines("Wi-Fi regulatory domain")
-	content := sBold.Render("Choose the wireless country code") + "\n\n" +
-		"This controls the permitted Wi-Fi channels and transmit limits.\n" +
-		sSubtle.Render("Use the two-letter ISO code for your current country.") + "\n\n" +
-		m.configInput.View()
+	spec := m.configSpec
+	if spec == nil {
+		// Defensive fallback; every prompt opener installs a spec.
+		spec = &promptSpec{
+			title:   "Input required",
+			heading: "Provide the requested value",
+		}
+	}
+	body := m.headerLines(spec.title)
+	content := sBold.Render(spec.heading)
+	if spec.detail != "" {
+		content += "\n\n" + spec.detail
+	}
+	if spec.hint != "" {
+		content += "\n" + sSubtle.Render(spec.hint)
+	}
+	content += "\n\n" + m.configInput.View()
 	if m.configError != "" {
 		content += "\n\n" + sBad.Render(m.configError)
 	}
@@ -64,12 +76,11 @@ func (m *model) viewConfiguration() string {
 		{label: "Cancel", action: "config-cancel"},
 	}
 	if m.h < 14 {
-		compact := []string{
-			sBold.Render("Choose the wireless country code"),
-			sSubtle.Render("Use the two-letter ISO code for your current country."),
-			"",
-			m.configInput.View(),
+		compact := []string{sBold.Render(spec.heading)}
+		if spec.hint != "" {
+			compact = append(compact, sSubtle.Render(spec.hint))
 		}
+		compact = append(compact, "", m.configInput.View())
 		if m.configError != "" {
 			compact = append(compact, sBad.Render(m.configError))
 		}
@@ -1008,12 +1019,29 @@ func (m *model) viewMain() string {
 		body = append(body, splitLines(detailsPanel(moduleSummary(mods[m.modCursor]), m.w-4, avail), "  ")...)
 	}
 
-	m.buttons = []*button{
-		{label: "Snapshot", action: "s", dim: !m.suite.Snapshots},
+	m.buttons = mainMenuButtons(m.suite.Snapshots)
+	return m.compose(body, m.renderFooter(mainMenuHints()))
+}
+
+// mainMenuButtons keeps the dashboard footer identical across the compact and
+// wide layouts. Updating is a suite-level concern, so it lives here rather
+// than inside any module; it is dimmed unless this is a managed portable
+// installation (pacman and git checkouts update through their own tooling).
+func mainMenuButtons(snapshots bool) []*button {
+	return []*button{
+		{label: "Snapshot", action: "s", dim: !snapshots},
+		{label: "Update", action: "u", dim: !portableInstall()},
 		{label: "About", action: "i"},
 		{label: "Quit", action: "q"},
 	}
-	return m.compose(body, m.renderFooter("↑↓ move · enter open · s snapshot · i about · r refresh · q quit"))
+}
+
+func mainMenuHints() string {
+	hints := "↑↓ move · enter open · s snapshot"
+	if portableInstall() {
+		hints += " · u update"
+	}
+	return hints + " · i about · r refresh · q quit"
 }
 
 func (m *model) renderModuleRow(i, width int) string {
@@ -1088,12 +1116,8 @@ func (m *model) viewMainWide() string {
 	m.listLeft = left + lipgloss.Width(logo) + 4
 	m.listTop = dashboardY + 3
 	m.listW = navContentW
-	m.buttons = []*button{
-		{label: "Snapshot", action: "s", dim: !m.suite.Snapshots},
-		{label: "About", action: "i"},
-		{label: "Quit", action: "q"},
-	}
-	return m.compose(body, m.renderFooter("↑↓ move · enter open · s snapshot · i about · r refresh · q quit"))
+	m.buttons = mainMenuButtons(m.suite.Snapshots)
+	return m.compose(body, m.renderFooter(mainMenuHints()))
 }
 
 func (m *model) viewModule() string {

@@ -6,40 +6,15 @@ common_power_profiles_applicable() {
 }
 
 common_power_profiles_status() {
-    local id=power-profiles-daemon
-    if tweak_has_state "$id"; then
-        if systemctl is-enabled power-profiles-daemon.service >/dev/null 2>&1 \
-            && systemctl is-active power-profiles-daemon.service >/dev/null 2>&1; then
-            printf 'on'
-        else
-            printf 'drifted'
-        fi
-    elif systemctl is-enabled power-profiles-daemon.service >/dev/null 2>&1 ||
-        systemctl is-active power-profiles-daemon.service >/dev/null 2>&1; then
-        printf 'unmanaged'
-    else
-        printf 'off'
-    fi
+    service_tweak_status power-profiles-daemon power-profiles-daemon.service
 }
 
 common_power_profiles_apply() {
-    local id=power-profiles-daemon prior_enabled prior_active
-    prior_enabled=$(systemctl is-enabled power-profiles-daemon.service 2>/dev/null || true)
-    prior_active=$(systemctl is-active power-profiles-daemon.service 2>/dev/null || true)
-    tweak_note "$id" prior-enabled "${prior_enabled:-disabled}"
-    tweak_note "$id" prior-active "${prior_active:-inactive}"
-    systemctl enable --now power-profiles-daemon.service
+    service_tweak_apply power-profiles-daemon power-profiles-daemon.service
 }
 
 common_power_profiles_revert() {
-    local id=power-profiles-daemon
-    if [[ $(tweak_read "$id" prior-enabled disabled) != enabled ]]; then
-        systemctl disable power-profiles-daemon.service
-    fi
-    if [[ $(tweak_read "$id" prior-active inactive) != active ]]; then
-        systemctl stop power-profiles-daemon.service
-    fi
-    rm -rf -- "$(tweak_dir "$id")"
+    service_tweak_revert power-profiles-daemon power-profiles-daemon.service
 }
 
 common_framework_charge_tool() {

@@ -426,6 +426,55 @@ tweak_read()  {
     [[ -r "$d/note-$2" ]] && cat "$d/note-$2" || printf '%s' "${3:-}"
 }
 
+# ---------------------------------------------------------------------------
+# Service-backed tweaks
+#
+# A tweak that turns a systemd unit on records the unit's prior enablement
+# and activity, and revert restores exactly that instead of assuming the
+# unit should stop. A unit that is already enabled or active without suite
+# state reads as unmanaged and is left alone.
+# ---------------------------------------------------------------------------
+
+# service_tweak_status ID UNIT
+service_tweak_status() {
+    local id=$1 unit=$2
+    if tweak_has_state "$id"; then
+        if systemctl is-enabled "$unit" >/dev/null 2>&1 &&
+            systemctl is-active "$unit" >/dev/null 2>&1; then
+            printf 'on'
+        else
+            printf 'drifted'
+        fi
+    elif systemctl is-enabled "$unit" >/dev/null 2>&1 ||
+        systemctl is-active "$unit" >/dev/null 2>&1; then
+        printf 'unmanaged'
+    else
+        printf 'off'
+    fi
+}
+
+# service_tweak_apply ID UNIT
+service_tweak_apply() {
+    local id=$1 unit=$2 prior_enabled prior_active
+    prior_enabled=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+    prior_active=$(systemctl is-active "$unit" 2>/dev/null || true)
+    tweak_note "$id" prior-enabled "${prior_enabled:-disabled}"
+    tweak_note "$id" prior-active "${prior_active:-inactive}"
+    systemctl enable --now "$unit"
+}
+
+# service_tweak_revert ID UNIT
+service_tweak_revert() {
+    local id=$1 unit=$2
+    if [[ $(tweak_read "$id" prior-enabled disabled) != enabled ]]; then
+        systemctl disable "$unit"
+    fi
+    if [[ $(tweak_read "$id" prior-active inactive) != active ]]; then
+        systemctl stop "$unit"
+    fi
+    rm -rf -- "$(tweak_dir "$id")"
+}
+
 # Keep only non-sensitive drift metadata readable by the unprivileged
 # frontend. Saved originals, ownership records, and notes remain mode 0600
 # below non-listable directories.

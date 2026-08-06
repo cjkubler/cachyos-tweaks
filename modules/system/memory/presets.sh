@@ -320,15 +320,7 @@ system_memory_capacity_status() { system_memory_profile_status capacity; }
 system_memory_capacity_apply() { system_memory_apply_profile capacity; }
 system_memory_capacity_revert() { system_memory_restore_defaults "${1:-}"; }
 
-system_extra_build() {
-    if [[ -n ${CACHYOS_TWEAKS_PORTABLE_ROOT:-} ]]; then
-        EX_IDS+=(update-suite)
-        EX_LABELS+=('Update Tweaks for CachyOS')
-        EX_DISABLED+=(0)
-        EX_CAPTURE+=(1)
-        EX_PRIVILEGED+=(0)
-        EX_DESC+=('Download the newest portable release, verify its SHA-256 checksum,'$'\n''and switch versions atomically. The current application remains open; restart'$'\n''it after a successful update to use the new version.')
-    fi
+system_memory_extra_build() {
     EX_IDS+=(memory-report)
     EX_LABELS+=('Inspect memory and swap')
     EX_DISABLED+=(0)
@@ -337,13 +329,7 @@ system_extra_build() {
     EX_DESC+=('Show current RAM availability, active swap devices and priorities,'$'\n''zram compression statistics, and the VM values controlled by these presets.'$'\n''This is read-only and is the best first step before choosing a policy.')
 }
 
-system_extra_run() {
-    local action=${EX_IDS[$1]}
-    if [[ "$action" == update-suite ]]; then
-        "$SUITE_DIR/tweaks.sh" update
-        return
-    fi
-    [[ "$action" == memory-report ]] || die "unknown system action: $action"
+system_memory_report() {
     printf 'Memory\n'
     free -h
     printf '\nActive swap\n'

@@ -63,6 +63,12 @@ for required in \
     "$root/modules/system/index.sh" \
     "$root/modules/system/memory/presets.sh" \
     "$root/modules/system/memory/README.md" \
+    "$root/modules/system/remote/ssh.sh" \
+    "$root/modules/system/remote/README.md" \
+    "$root/modules/system/kernel/sysrq.sh" \
+    "$root/modules/system/kernel/README.md" \
+    "$root/modules/system/storage/trim.sh" \
+    "$root/modules/system/storage/README.md" \
     "$root/modules/devices/framework-13.md" \
     "$root/modules/devices/framework-16.md" \
     "$root/modules/devices/lenovo-yoga-7-14ahp9.md" \
@@ -108,19 +114,20 @@ grep -Fx '# Managed by Tweaks for CachyOS portable installer.' \
     "$portable_bin/tweaks-for-cachyos" >/dev/null ||
     { printf 'package_test: portable wrapper is not marked as managed\n' >&2; exit 1; }
 "$portable_bin/tweaks-for-cachyos" --help >/dev/null
+# The suite update moved to the TUI main menu (it is a suite concern, not a
+# General OS tweak); the module protocol must not re-grow an update action.
 (
     register_module_doc() { :; }
     declare -a SYSTEM_TWEAKS=()
     declare -a EX_IDS=() EX_LABELS=() EX_DISABLED=() EX_CAPTURE=() EX_PRIVILEGED=() EX_DESC=()
-    CACHYOS_TWEAKS_PORTABLE_ROOT=$portable_root
     # shellcheck source=modules/system/memory/presets.sh
     . "$portable_root/current/modules/system/memory/presets.sh"
-    system_extra_build
-    [[ "${EX_IDS[0]}" == update-suite &&
-        "${EX_LABELS[0]}" == 'Update Tweaks for CachyOS' &&
-        "${EX_PRIVILEGED[0]}" == 0 ]]
+    system_memory_extra_build
+    for extra_id in "${EX_IDS[@]}"; do
+        [[ "$extra_id" != update-suite ]] || exit 1
+    done
 ) || {
-    printf 'package_test: portable update action is missing from the TUI protocol\n' >&2
+    printf 'package_test: the module protocol regrew the relocated update action\n' >&2
     exit 1
 }
 CACHYOS_TWEAKS_PORTABLE_ROOT="$portable_root" \

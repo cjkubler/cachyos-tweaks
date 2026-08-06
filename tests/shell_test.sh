@@ -11,6 +11,8 @@ readonly SUITE_DIR
 STATE_ROOT="$TEST_DIR/state"
 SYSTEM_MEMORY_SYSCTL="$TEST_DIR/memory.conf"
 SYSTEM_MEMORY_UDEV="$TEST_DIR/memory.rules"
+SYSTEM_SYSRQ_SYSCTL="$TEST_DIR/sysrq.conf"
+SYSTEM_SSH_DROPIN="$TEST_DIR/sshd-hardening.conf"
 MANAGED_OWNER_UID=$(id -u)
 MANAGED_OWNER_GID=$(id -g)
 
@@ -310,6 +312,215 @@ rm -f -- "$SYSTEM_MEMORY_SYSCTL" "$SYSTEM_MEMORY_UDEV"
         fail 'memory defaults did not remove suite-created overrides'
     [[ ! -e $(tweak_dir "$SYSTEM_MEMORY_STATE") ]] ||
         fail 'memory defaults did not remove managed state'
+)
+
+# Magic SysRq presets mirror the memory-policy contract: one managed sysctl
+# file, a recorded prior live value, and a default row that restores it.
+assert_eq "$(system_sysrq_default_status)" on
+(
+    fake_sysrq=16
+    sysctl() {
+        if [[ "$1" == -n ]]; then
+            [[ "$2" == kernel.sysrq ]] || return 1
+            printf '%s\n' "$fake_sysrq"
+            return
+        fi
+        [[ "$1" == -q && "$2" == -w && "$3" == kernel.sysrq=* ]] || return 1
+        fake_sysrq=${3#*=}
+    }
+    managed_write() {
+        local id=$1 target=$2 mode=$3 dir e
+        dir=$(tweak_dir "$id")
+        e=$(esc_path "$target")
+        mkdir -p "$dir/managed"
+        cat >"$target"
+        chmod "$mode" "$target"
+        sha256sum "$target" | awk '{ print $1 }' >"$dir/managed/$e"
+        manifest_add "$id" "$target"
+    }
+
+    system_sysrq_apply_profile reisub
+    assert_eq "$fake_sysrq" 244
+    assert_eq "$(system_sysrq_reisub_status)" on
+    assert_eq "$(system_sysrq_full_status)" off
+    assert_eq "$(system_sysrq_default_status)" off
+    assert_eq "$(tweak_read "$SYSTEM_SYSRQ_STATE" prior-sysrq)" 16
+
+    system_sysrq_apply_profile full
+    assert_eq "$fake_sysrq" 1
+    assert_eq "$(system_sysrq_full_status)" on
+    assert_eq "$(system_sysrq_reisub_status)" off
+    assert_eq "$(tweak_read "$SYSTEM_SYSRQ_STATE" prior-sysrq)" 16
+
+    printf '# edited\n' >>"$SYSTEM_SYSRQ_SYSCTL"
+    assert_eq "$(system_sysrq_full_status)" drifted
+    system_sysrq_sysctl_content full >"$SYSTEM_SYSRQ_SYSCTL"
+
+    system_sysrq_restore_default
+    assert_eq "$fake_sysrq" 16
+    [[ ! -e "$SYSTEM_SYSRQ_SYSCTL" ]] ||
+        fail 'SysRq default did not remove the suite-created override'
+    [[ ! -e $(tweak_dir "$SYSTEM_SYSRQ_STATE") ]] ||
+        fail 'SysRq default did not remove managed state'
+)
+
+# The SSH hardening drop-in validates the resulting configuration before a
+# running server is reloaded, and removes itself when validation fails.
+ssh_stub_bin="$TEST_DIR/ssh-stub-bin"
+mkdir -p "$ssh_stub_bin"
+printf '#!/bin/sh\nexit 0\n' >"$ssh_stub_bin/ssh-keygen"
+chmod 0755 "$ssh_stub_bin/ssh-keygen"
+(
+    PATH="$ssh_stub_bin:$PATH"
+    systemctl() { return 0; }
+    sshd() { return 0; }
+    managed_write() {
+        local id=$1 target=$2 mode=$3 dir e
+        dir=$(tweak_dir "$id")
+        e=$(esc_path "$target")
+        mkdir -p "$dir/managed"
+        cat >"$target"
+        chmod "$mode" "$target"
+        sha256sum "$target" | awk '{ print $1 }' >"$dir/managed/$e"
+        manifest_add "$id" "$target"
+    }
+
+    # Key-only authentication may not be applied while no login account has a
+    # usable authorized key: that would lock every account out.
+    ssh_home="$TEST_DIR/ssh-home"
+    # shellcheck disable=SC2034 # consumed indirectly by system_ssh_login_accounts
+    SYSTEM_SSH_ACCOUNTS="tester:$ssh_home"
+    assert_eq "$(system_ssh_hardening_status)" off
+    if (system_ssh_hardening_apply) 2>/dev/null; then
+        fail 'SSH hardening applied with no authorized key anywhere'
+    fi
+    [[ ! -e "$SYSTEM_SSH_DROPIN" ]] ||
+        fail 'refused SSH hardening still installed its drop-in'
+    mkdir -p "$ssh_home/.ssh"
+    printf '# comment only\n\n' >"$ssh_home/.ssh/authorized_keys"
+    if (system_ssh_hardening_apply) 2>/dev/null; then
+        fail 'SSH hardening treated a key-less authorized_keys file as usable'
+    fi
+    printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY tester@client\n' \
+        >>"$ssh_home/.ssh/authorized_keys"
+    system_ssh_any_authorized_key ||
+        fail 'a usable authorized key was not detected'
+    grep -q 'tester: 1 authorized key' <(system_ssh_key_report) ||
+        fail 'the key report did not count the usable key'
+
+    system_ssh_hardening_apply
+    assert_eq "$(system_ssh_hardening_status)" on
+    grep -qx 'PasswordAuthentication no' "$SYSTEM_SSH_DROPIN" ||
+        fail 'SSH hardening drop-in is missing its password policy'
+    printf '# edited\n' >>"$SYSTEM_SSH_DROPIN"
+    assert_eq "$(system_ssh_hardening_status)" drifted
+    system_ssh_hardening_revert
+    [[ ! -e "$SYSTEM_SSH_DROPIN" ]] ||
+        fail 'SSH hardening revert did not remove the drop-in'
+    assert_eq "$(system_ssh_hardening_status)" off
+
+    sshd() { return 1; }
+    if (system_ssh_hardening_apply) 2>/dev/null; then
+        fail 'SSH hardening applied a configuration sshd rejected'
+    fi
+    [[ ! -e "$SYSTEM_SSH_DROPIN" && ! -e $(tweak_dir ssh-hardening) ]] ||
+        fail 'rejected SSH hardening left its drop-in or state behind'
+)
+
+# Key imports resolve provider shorthands, validate every candidate with
+# ssh-keygen, deduplicate against the target file, and record the source as a
+# comment on comment-less keys.
+ssh-keygen -q -t ed25519 -N '' -C 'tester@client' -f "$TEST_DIR/import-key"
+ssh-keygen -q -t ed25519 -N '' -C '' -f "$TEST_DIR/import-key-bare"
+import_key=$(<"$TEST_DIR/import-key.pub")
+import_key_bare=$(<"$TEST_DIR/import-key-bare.pub")
+import_home="$TEST_DIR/import-home"
+mkdir -p "$import_home"
+(
+    system_ssh_import_account() { printf 'tester:%s\n' "$import_home"; }
+    curl() {
+        printf '%s\n' "$*" >"$TEST_DIR/curl-args"
+        printf '%s\n' "$import_key" 'this is not a key'
+    }
+    keys_file="$import_home/.ssh/authorized_keys"
+
+    export CACHYOS_TWEAKS_EXTRA_INPUT='octocat'
+    system_ssh_import_keys >/dev/null
+    grep -qF 'https://github.com/octocat.keys' "$TEST_DIR/curl-args" ||
+        fail 'a bare name was not fetched as a GitHub username'
+    [[ $(grep -c '^ssh-ed25519' "$keys_file") -eq 1 ]] ||
+        fail 'the fetched key was not imported exactly once'
+    if grep -qF 'this is not a key' "$keys_file"; then
+        fail 'an invalid line from the source was imported'
+    fi
+    assert_eq "$(stat -c %a "$keys_file")" 600
+    assert_eq "$(stat -c %a "$import_home/.ssh")" 700
+
+    import_output=$(system_ssh_import_keys)
+    grep -qF 'already present' <<<"$import_output" ||
+        fail 'a repeated import did not report the duplicate'
+    [[ $(grep -c '^ssh-ed25519' "$keys_file") -eq 1 ]] ||
+        fail 'a repeated import duplicated the key'
+
+    export CACHYOS_TWEAKS_EXTRA_INPUT="$import_key_bare"
+    system_ssh_import_keys >/dev/null
+    [[ $(grep -c '^ssh-ed25519' "$keys_file") -eq 2 ]] ||
+        fail 'a pasted public key was not imported'
+
+    export CACHYOS_TWEAKS_EXTRA_INPUT='github:bad//name'
+    if (system_ssh_import_keys) >/dev/null 2>&1; then
+        fail 'an invalid provider username was accepted'
+    fi
+    export CACHYOS_TWEAKS_EXTRA_INPUT='ftp://example.com/keys'
+    if (system_ssh_import_keys) >/dev/null 2>&1; then
+        fail 'a non-https source was accepted'
+    fi
+)
+
+# Service-backed tweaks record the prior enablement and activity and restore
+# exactly that; an externally enabled unit reads as unmanaged.
+(
+    fake_enabled=no
+    fake_active=no
+    systemctl() {
+        case $1 in
+            is-enabled)
+                [[ "$fake_enabled" == yes ]] && { printf 'enabled\n'; return 0; }
+                printf 'disabled\n'
+                return 1
+                ;;
+            is-active)
+                [[ "$fake_active" == yes ]] && { printf 'active\n'; return 0; }
+                printf 'inactive\n'
+                return 3
+                ;;
+            enable)
+                [[ "$2" == --now ]] || return 1
+                fake_enabled=yes
+                fake_active=yes
+                ;;
+            disable) fake_enabled=no ;;
+            stop) fake_active=no ;;
+            *) return 1 ;;
+        esac
+    }
+
+    assert_eq "$(service_tweak_status svc-example example.service)" off
+    fake_active=yes
+    assert_eq "$(service_tweak_status svc-example example.service)" unmanaged
+    fake_active=no
+
+    service_tweak_apply svc-example example.service
+    assert_eq "$(service_tweak_status svc-example example.service)" on
+    assert_eq "$(tweak_read svc-example prior-enabled)" disabled
+    assert_eq "$(tweak_read svc-example prior-active)" inactive
+
+    service_tweak_revert svc-example example.service
+    assert_eq "$(service_tweak_status svc-example example.service)" off
+    [[ "$fake_enabled" == no && "$fake_active" == no ]] ||
+        fail 'service revert did not restore the recorded prior state'
+    [[ ! -e $(tweak_dir svc-example) ]] ||
+        fail 'service revert retained suite state'
 )
 
 # Firmware-backed charge policies distinguish an external active setting from

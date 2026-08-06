@@ -1,6 +1,6 @@
 pkgbase = tweaks-for-cachyos-git
 	pkgdesc = Development version of a terminal interface for reversible CachyOS system tweaks
-	pkgver = 0.1.0.r1
+	pkgver = 0.2.0.r1
 	pkgrel = 1
 	url = https://github.com/cjkubler/cachyos-tweaks
 	arch = x86_64
@@ -28,7 +28,7 @@ pkgbase = tweaks-for-cachyos-git
 	optdepends = pciutils: hardware detection and eGPU diagnostics
 	optdepends = snapper: automatic and manual system snapshots
 	optdepends = usbutils: USB device diagnostics
-	provides = tweaks-for-cachyos=0.1.0.r1
+	provides = tweaks-for-cachyos=0.2.0.r1
 	conflicts = tweaks-for-cachyos
 	options = !debug
 	source = cachyos-tweaks::git+https://github.com/cjkubler/cachyos-tweaks.git#branch=main

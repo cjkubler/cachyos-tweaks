@@ -104,6 +104,10 @@ tar -C "$extract_dir" -xzf "$archive"
 ( cd "$test_dir" && sha256sum "${archive##*/}" >SHA256SUMS )
 portable_root="$test_dir/portable"
 portable_bin="$test_dir/bin"
+# A pre-existing foreign command at the short-alias path must survive the
+# installation untouched.
+mkdir -p "$portable_bin"
+printf 'foreign\n' >"$portable_bin/tweaks"
 TWEAKS_RELEASE_BASE_URL="file://$test_dir" \
 TWEAKS_PORTABLE_ROOT="$portable_root" \
 TWEAKS_PORTABLE_BIN_DIR="$portable_bin" \
@@ -114,6 +118,9 @@ grep -Fx '# Managed by Tweaks for CachyOS portable installer.' \
     "$portable_bin/tweaks-for-cachyos" >/dev/null ||
     { printf 'package_test: portable wrapper is not marked as managed\n' >&2; exit 1; }
 "$portable_bin/tweaks-for-cachyos" --help >/dev/null
+[[ ! -L "$portable_bin/tweaks" && $(<"$portable_bin/tweaks") == foreign ]] ||
+    { printf 'package_test: installer replaced an unmanaged short command\n' >&2; exit 1; }
+rm "$portable_bin/tweaks"
 # The suite update moved to the TUI main menu (it is a suite concern, not a
 # General OS tweak); the module protocol must not re-grow an update action.
 (
@@ -148,5 +155,8 @@ TWEAKS_RELEASE_BASE_URL="file://$test_dir" \
 [[ $(readlink "$portable_root/current") == versions/1.2.4 &&
     -d "$portable_root/versions/1.2.3" ]] ||
     { printf 'package_test: portable update was not atomic or dropped its rollback\n' >&2; exit 1; }
+[[ $(readlink "$portable_bin/tweaks") == tweaks-for-cachyos ]] ||
+    { printf 'package_test: the freed short-command path was not adopted on update\n' >&2; exit 1; }
+"$portable_bin/tweaks" --help >/dev/null
 
 printf 'release package tests passed\n'

@@ -17,9 +17,10 @@ curl -fsSL https://raw.githubusercontent.com/cjkubler/cachyos-tweaks/main/script
 ```
 
 This installs entirely below your home directory and provides the
-`tweaks-for-cachyos` command. It does not use or modify pacman’s package
-database. The application requests administrator authorization only when a
-system change needs it.
+`tweaks-for-cachyos` command along with the short alias `tweaks` (skipped if
+something else already owns that name). It does not use or modify pacman’s
+package database. The application requests administrator authorization only
+when a system change needs it.
 
 Update from the main screen of the TUI (`u` or the Update button) or from a
 terminal:
@@ -33,7 +34,7 @@ checksum, and atomically switch the active version. Previous versions remain
 under `~/.local/share/tweaks-for-cachyos/versions/` for manual rollback.
 
 Revert any active tweaks before uninstalling. Then remove
-`~/.local/bin/tweaks-for-cachyos` and
+`~/.local/bin/tweaks-for-cachyos`, the `~/.local/bin/tweaks` alias, and
 `~/.local/share/tweaks-for-cachyos/`. Uninstall does not guess which active
 system changes should be reverted.
 
@@ -53,7 +54,8 @@ system changes should be reverted.
 After installation, launch:
 
 ```bash
-tweaks-for-cachyos
+tweaks              # short alias
+tweaks-for-cachyos  # full command name
 ```
 
 For development from a source checkout instead:

@@ -2,7 +2,7 @@
 pkgname=tweaks-for-cachyos-git
 _appname=tweaks-for-cachyos
 _srcname=cachyos-tweaks
-pkgver=0.1.0.r1
+pkgver=0.2.0.r1
 pkgrel=1
 pkgdesc='Development version of a terminal interface for reversible CachyOS system tweaks'
 arch=('x86_64' 'aarch64')
@@ -41,7 +41,7 @@ sha256sums=('SKIP')
 
 pkgver() {
     cd "$srcdir/$_srcname"
-    printf '0.1.0.r%s' "$(git rev-list --count HEAD)"
+    printf '0.2.0.r%s' "$(git rev-list --count HEAD)"
 }
 
 build() {
@@ -83,6 +83,7 @@ package() {
 
     install -Dm0755 "$source_dir/packaging/tweaks-for-cachyos" \
         "$pkgdir/usr/bin/$_appname"
+    ln -s "$_appname" "$pkgdir/usr/bin/tweaks"
     install -Dm0644 "$source_dir/LICENSE" \
         "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -d "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_LICENSES"

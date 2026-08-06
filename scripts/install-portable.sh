@@ -3,6 +3,7 @@
 set -Eeuo pipefail
 
 readonly PROGRAM_NAME=tweaks-for-cachyos
+readonly ALIAS_NAME=tweaks
 readonly REPOSITORY=cjkubler/cachyos-tweaks
 readonly WRAPPER_MARKER='# Managed by Tweaks for CachyOS portable installer.'
 
@@ -176,12 +177,30 @@ wrapper_tmp=$(mktemp "$bin_dir/.tweaks-for-cachyos.XXXXXX")
 chmod 0755 "$wrapper_tmp"
 mv -Tf -- "$wrapper_tmp" "$command_path"
 
+# A short launcher beside the full command name. Anything at that path the
+# installer does not recognize as its own is left untouched.
+alias_path="$bin_dir/$ALIAS_NAME"
+alias_note=''
+if [[ -L "$alias_path" ]]; then
+    if [[ $(readlink "$alias_path") == "$PROGRAM_NAME" ]]; then
+        alias_note="Short command: $alias_path"
+    else
+        alias_note="Note: $alias_path links elsewhere; the short command was not installed."
+    fi
+elif [[ -e "$alias_path" ]]; then
+    alias_note="Note: $alias_path already exists; the short command was not installed."
+else
+    ln -s "$PROGRAM_NAME" "$alias_path"
+    alias_note="Short command: $alias_path"
+fi
+
 if [[ "$mode" == update && "$current_target" == "versions/$version" ]]; then
     printf 'Tweaks for CachyOS %s is already current.\n' "$version"
 else
     printf 'Tweaks for CachyOS %s is installed.\n' "$version"
 fi
 printf 'Command: %s\n' "$command_path"
+printf '%s\n' "$alias_note"
 case :$PATH: in
     *:"$bin_dir":*) ;;
     *) printf 'Add %s to PATH before launching %s.\n' "$bin_dir" "$PROGRAM_NAME" ;;

@@ -262,7 +262,7 @@ func newModel() *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.spin.Tick, marqueeTick(), loadDump)
+	return tea.Batch(m.spin.Tick, marqueeTick(), devicePollTick(), loadDump)
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +563,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dumpMsg:
 		return m.onDump(msg)
+
+	case devicePollTickMsg:
+		return m.onDevicePollTick()
+
+	case devicesMsg:
+		return m.onDevices(msg)
 
 	case authMsg:
 		return m.onAuth(msg)

@@ -118,6 +118,7 @@ u2f_tg_build() {
         enrolled="${#U2F_KEY_IDS[@]} of $U2F_MAX_KEYS enrolled"
     fi
     u2f_detect_keys
+    u2f_match_devices
     for name in "${U2F_DEVICE_NAMES[@]}"; do
         connected+=${connected:+, }$name
     done
@@ -150,6 +151,22 @@ u2f_tg_build() {
         fi
         TG_DESC+=("$desc")
     done
+}
+
+u2f_key_label() {
+    local i
+    for i in "${!U2F_KEY_IDS[@]}"; do
+        [[ "${U2F_KEY_IDS[i]}" != "$1" ]] || { printf '%s' "${U2F_KEY_NAMES[i]}"; return; }
+    done
+    printf 'ID %s' "$1"
+}
+
+u2f_key_connected() {
+    local key
+    for key in "${U2F_DEVICE_KEYS[@]}"; do
+        [[ "$key" != "$1" ]] || return 0
+    done
+    return 1
 }
 
 u2f_tg_toggleable() {
@@ -188,6 +205,9 @@ u2f_device_extras() {
         desc="$U2F_DEV_DESC"$'\n\n'"Device: ${U2F_DEVICE_NAMES[i]} (/dev/${U2F_DEVICES[i]})"$'\n'"$body"
         if [[ -n "$reason" ]]; then
             EX_DISABLED+=(1); desc+=$'\n\n'"${C_YELLOW}Disabled: $reason${C_RESET}"
+        elif [[ -n "${U2F_DEVICE_KEYS[i]:-}" ]]; then
+            EX_DISABLED+=(1)
+            desc+=$'\n\n'"${C_YELLOW}Disabled: already enrolled as $(u2f_key_label "${U2F_DEVICE_KEYS[i]}").${C_RESET}"
         else
             EX_DISABLED+=(0)
         fi
@@ -221,7 +241,8 @@ u2f_tg_extra_build() {
             "Enroll this authenticator as one more key ($count of $U2F_MAX_KEYS used;"$'\n''pam_u2f reads no more). You approve twice: once to register it and'$'\n''once for an isolated PAM test. Any enrolled key then works for every'$'\n''enabled service.' "$reason"
 
         for i in "${!U2F_KEY_IDS[@]}"; do
-            EX_IDS+=("remove-key-${U2F_KEY_IDS[i]}"); EX_LABELS+=("Remove authenticator: ${U2F_KEY_NAMES[i]}")
+            EX_IDS+=("remove-key-${U2F_KEY_IDS[i]}")
+            EX_LABELS+=("Remove authenticator: ${U2F_KEY_NAMES[i]}$(u2f_key_connected "${U2F_KEY_IDS[i]}" && printf ' (connected)')")
             EX_CAPTURE+=(0); EX_PRIVILEGED+=(1)
             if (( count == 1 )); then
                 EX_DISABLED+=(1)

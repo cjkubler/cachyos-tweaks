@@ -452,6 +452,10 @@ u2f_add_key() {
     u2f_select_device "${1:-}"
     label="$U2F_DEVICE_NAME, added $(date +%F)"
     origin=$(tweak_read "$U2F_ID" origin "$(u2f_origin)")
+    for existing in "${creds[@]}"; do
+        ! u2f_device_holds "$U2F_DEVICE" "$origin" "$existing" ||
+            die "$U2F_DEVICE_NAME is already enrolled (ID $(u2f_credential_id "$existing"))"
+    done
     uid=$(id -u "$user")
     gid=$(id -g "$user")
     work=$(mktemp -d -p "$SUITE_WORK")
@@ -701,6 +705,38 @@ u2f_register() {
         return 1
     fido2-cred -V -i "$work/made" -o "$work/verified" es256 || return 1
     u2f_credential_from_verified "$work/verified"
+}
+
+# Succeed when /dev/DEVICE holds the mapping credential CRED, asking without
+# user presence so nothing blinks. FIDO2 keys answer with an assertion; U2F
+# keys answer a check-only request with "user presence required".
+u2f_device_holds() {
+    local device=$1 origin=$2 cred=$3 err
+    command -v fido2-assert >/dev/null 2>&1 || return 1
+    err=$(printf '%s\n' "$(head -c 32 /dev/urandom | base64 -w0)" "$origin" "${cred%%,*}" |
+        timeout 10 fido2-assert -G -t up=false "/dev/$device" 2>&1 >/dev/null) && return 0
+    [[ "$err" == *FIDO_ERR_USER_PRESENCE_REQUIRED* ]]
+}
+
+U2F_DEVICE_KEYS=()
+# Fill U2F_DEVICE_KEYS, parallel to U2F_DEVICES, with the ID of the enrolled
+# key each connected authenticator holds, or '' for a key not enrolled.
+u2f_match_devices() {
+    local user origin cred i
+    local -a creds=()
+    U2F_DEVICE_KEYS=()
+    for i in "${!U2F_DEVICES[@]}"; do U2F_DEVICE_KEYS+=(''); done
+    user=$(u2f_enrolled_user) || return 0
+    mapfile -t creds < <(u2f_credentials "$U2F_MAPPING" "$user")
+    origin=$(tweak_read "$U2F_ID" origin "$(u2f_origin)")
+    for i in "${!U2F_DEVICES[@]}"; do
+        for cred in "${creds[@]}"; do
+            if u2f_device_holds "${U2F_DEVICES[i]}" "$origin" "$cred"; then
+                U2F_DEVICE_KEYS[i]=$(u2f_credential_id "$cred")
+                break
+            fi
+        done
+    done
 }
 
 # The target-user note is root-only. Unprivileged listings fall back to the

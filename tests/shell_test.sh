@@ -658,6 +658,36 @@ u2f_select_device ''
 assert_eq "$U2F_DEVICE/$U2F_DEVICE_NAME" 'hidraw5/Solo Key'
 unset -f fido2-token
 
+# Silent probes, as observed on real keys: a FIDO2 key holding the
+# credential signs, a U2F key holding it reports that presence is required,
+# and any other key reports no credentials.
+u2f_assert_bin="$TEST_DIR/u2f-assert-bin"
+mkdir -p "$u2f_assert_bin"
+cat >"$u2f_assert_bin/fido2-assert" <<'EOF'
+#!/bin/sh
+[ "$3" = up=false ] || { echo "probe asked for presence: $*" >&2; exit 2; }
+{ read -r _; read -r _; read -r id; }
+case "${4#/dev/}:$id" in
+    hidraw0:fido2Cred) echo signed ;;
+    hidraw3:u2fCred) echo 'fido2-assert: fido_dev_get_assert: FIDO_ERR_USER_PRESENCE_REQUIRED' >&2; exit 1 ;;
+    *) echo 'fido2-assert: fido_dev_get_assert: FIDO_ERR_NO_CREDENTIALS' >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$u2f_assert_bin/fido2-assert"
+u2f_saved_path=$PATH
+PATH="$u2f_assert_bin:$PATH"
+u2f_device_holds hidraw0 pam://host 'fido2Cred,key,es256,+presence' ||
+    fail 'a FIDO2 key holding the credential was not recognized'
+u2f_device_holds hidraw3 pam://host 'u2fCred,key,es256,+presence' ||
+    fail 'a U2F key holding the credential was not recognized'
+for u2f_probe in 'hidraw0 u2fCred' 'hidraw3 fido2Cred'; do
+    read -r u2f_probe_dev u2f_probe_id <<<"$u2f_probe"
+    if u2f_device_holds "$u2f_probe_dev" pam://host "$u2f_probe_id,key,es256,+presence"; then
+        fail "$u2f_probe_dev claimed a credential it does not hold"
+    fi
+done
+PATH=$u2f_saved_path
+
 # fido2-cred -V prints the credential id and a PEM key; pam_u2f wants the
 # es256 key as raw X||Y, the point openssl prints without its 0x04 tag.
 u2f_ec_key="$TEST_DIR/u2f-ec.pem"

@@ -14,9 +14,14 @@ key works for every enabled service. SSH configuration is never changed.
   service.
 - **Add authenticator** appears once for each connected authenticator. It
   registers that key and proves it with the same isolated test. If the test
-  fails, the key mapping is restored.
-- **Remove authenticator** appears for each enrolled key. The last key can only
-  go with **Remove enrollment**.
+  fails, the key mapping is restored. A key that is already enrolled cannot be
+  added again.
+- **Remove authenticator** appears for each enrolled key and is marked
+  *connected* while that key is plugged in. The last key can only go with
+  **Remove enrollment**.
+
+The screen follows authenticators as they are plugged in or removed. It asks
+each connected key, without a touch, which enrolled credential it holds.
 - **Remove enrollment** removes every enrolled key. It becomes available after
   every managed service is off.
 

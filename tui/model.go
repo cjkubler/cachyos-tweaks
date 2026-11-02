@@ -477,7 +477,7 @@ func (m *model) buildConfirm() {
 		}
 	}
 	if anyOn && m.mod.U2FUnenrolled() {
-		lines = append(lines, sBold.Render("• Enroll the connected authenticator first")+
+		lines = append(lines, sBold.Render("• Enroll the only connected authenticator first")+
 			" (required; approve twice on the key)")
 	}
 	for _, t := range m.mod.Tweaks {

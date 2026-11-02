@@ -35,6 +35,29 @@ func record(fields ...string) string {
 	return strings.Join(fields, fieldSep) + recordSep
 }
 
+func TestU2FUnenrolledFollowsEnrollActions(t *testing.T) {
+	cases := []struct {
+		module string
+		ids    []string
+		want   bool
+	}{
+		{"u2f", []string{"enroll"}, true},
+		{"u2f", []string{"enroll-hidraw3", "enroll-hidraw0"}, true},
+		{"u2f", []string{"test", "add-key-hidraw3", "remove-key-0123456789ab", "unenroll"}, false},
+		{"u2f", []string{"test", "add-key", "unenroll"}, false},
+		{"system", []string{"enroll-hidraw3"}, false},
+	}
+	for _, c := range cases {
+		m := Module{Name: c.module}
+		for _, id := range c.ids {
+			m.Extras = append(m.Extras, Extra{Module: c.module, ID: id})
+		}
+		if got := m.U2FUnenrolled(); got != c.want {
+			t.Errorf("U2FUnenrolled(%s %v) = %v, want %v", c.module, c.ids, got, c.want)
+		}
+	}
+}
+
 func TestParseDump(t *testing.T) {
 	out := record("SUITE", "1", "host", "kernel") +
 		record("MODULE", "fw13", "Framework 13") +

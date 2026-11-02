@@ -26,7 +26,7 @@ checkdepends=('shellcheck')
 optdepends=(
     'gcc: compile the optional U2F enrollment verifier'
     'iw: inspect and configure wireless regulatory domains'
-    'libfido2: detect connected FIDO2/U2F authenticators'
+    'libfido2: detect and register FIDO2/U2F authenticators'
     'networkmanager: apply NetworkManager-specific power settings'
     'pam-u2f: enable U2F authentication'
     'pciutils: hardware detection and eGPU diagnostics'

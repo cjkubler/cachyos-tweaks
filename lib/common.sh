@@ -308,12 +308,12 @@ managed_restore() {
     # operates on the link itself. Parent symlinks remain forbidden.
     managed_validate_target "$target" --allow-final-symlink
     if [[ -e "$dir/existed/$e" ]]; then
-        local mode owner group
-        read -r mode owner group <"$dir/existed/$e"
-        # Older state dirs recorded only an empty marker; fall back to the
-        # previous behavior for those instead of failing the restore.
+        local mode='' owner='' group=''
+        # Older state dirs recorded only an empty marker, on which read fails;
+        # fall back to the previous behavior instead of failing the restore.
+        read -r mode owner group <"$dir/existed/$e" || true
         restore_tmp=$(mktemp "${target%/*}/.cachyos-tweaks.XXXXXX") || return 1
-        if ! install -o "${owner:-0}" -g "${group:-0}" -m "${mode:-0644}" \
+        if ! install -o "${owner:-$MANAGED_OWNER_UID}" -g "${group:-$MANAGED_OWNER_GID}" -m "${mode:-0644}" \
             "$dir/saved/$e" "$restore_tmp" ||
             ! mv -fT -- "$restore_tmp" "$target"; then
             rm -f -- "$restore_tmp"

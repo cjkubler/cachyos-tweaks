@@ -88,6 +88,14 @@ managed_restore restore-example "$existing_target"
 assert_eq "$(<"$existing_target")" before
 assert_eq "$(stat -c %a "$existing_target")" 604
 
+legacy_target="$TEST_DIR/legacy-existed.conf"
+printf 'before\n' >"$legacy_target"
+printf 'after\n' | managed_write legacy-example "$legacy_target" 0600
+: >"$(tweak_dir legacy-example)/existed/$(esc_path "$legacy_target")"
+managed_restore legacy-example "$legacy_target"
+assert_eq "$(<"$legacy_target")" before
+assert_eq "$(stat -c %a "$legacy_target")" 644
+
 # Reverts that require a successful follow-up command retain their original
 # backups until that command commits. A failed initramfs/service reload can
 # therefore be retried without losing the exact pre-apply state.
@@ -583,6 +591,97 @@ printf '%s\n' \
     'auth include system-auth' >"$u2f_pam_file"
 if u2f_external_rule_bounds "$u2f_service" "$u2f_pam_file"; then
     fail 'mixed custom U2F configuration was considered removable'
+fi
+
+# Key management edits only the enrolled user's line and refuses to leave a
+# user with no credentials.
+u2f_mapping="$TEST_DIR/u2f_mappings"
+u2f_other_line='bob:bobHandle,bobKey,es256,+presence'
+u2f_cred_a='aliceHandle1,aliceKey1,es256,+presence'
+u2f_cred_b='aliceHandle2,aliceKey2,es256,+presence+pin'
+u2f_cred_new='aliceHandle3,aliceKey3,eddsa,+presence'
+printf '%s\n' "$u2f_other_line" "alice:$u2f_cred_a:$u2f_cred_b" >"$u2f_mapping"
+assert_eq "$(u2f_credentials "$u2f_mapping" alice)" "$u2f_cred_a"$'\n'"$u2f_cred_b"
+assert_eq "$(u2f_credentials "$u2f_mapping" ali)" ''
+
+u2f_id_a=$(u2f_credential_id "$u2f_cred_a")
+u2f_id_b=$(u2f_credential_id "$u2f_cred_b")
+[[ "$u2f_id_a" =~ ^[0-9a-f]{12}$ ]] || fail "credential id is not 12 hex digits: $u2f_id_a"
+assert_eq "$(u2f_credential_id "$u2f_cred_a")" "$u2f_id_a"
+[[ "$u2f_id_a" != "$u2f_id_b" ]] || fail 'distinct credentials share an id'
+
+u2f_mapping_append "$u2f_mapping" alice "$u2f_cred_new" >"$TEST_DIR/u2f-appended"
+assert_eq "$(<"$TEST_DIR/u2f-appended")" \
+    "$u2f_other_line"$'\n'"alice:$u2f_cred_a:$u2f_cred_b:$u2f_cred_new"
+if u2f_mapping_append "$u2f_mapping" carol "$u2f_cred_new" >/dev/null; then
+    fail 'appending for a user without a mapping line succeeded'
+fi
+
+u2f_mapping_remove "$u2f_mapping" alice "$u2f_id_a" >"$TEST_DIR/u2f-reduced"
+assert_eq "$(<"$TEST_DIR/u2f-reduced")" "$u2f_other_line"$'\n'"alice:$u2f_cred_b"
+if u2f_mapping_remove "$u2f_mapping" alice 000000000000 >/dev/null; then
+    fail 'removing an unknown credential id succeeded'
+fi
+if u2f_mapping_remove "$TEST_DIR/u2f-reduced" alice "$u2f_id_b" >/dev/null; then
+    fail 'removing the last credential succeeded'
+fi
+
+u2f_labels="$TEST_DIR/key-labels"
+u2f_label_store "$u2f_labels" "$u2f_id_b" $'Thetis Key\t(F829), added 2026-11-02'
+assert_eq "$(stat -c %a "$u2f_labels")" 644
+assert_eq "$(u2f_key_list "$u2f_mapping" alice "$u2f_labels")" \
+    "$u2f_id_a"$'\t'"Authenticator $u2f_id_a"$'\n'"$u2f_id_b"$'\t''Thetis Key (F829), added 2026-11-02'
+u2f_label_store "$u2f_labels" "$u2f_id_a" 'Spare key'
+u2f_label_store "$u2f_labels" "$u2f_id_b"
+assert_eq "$(<"$u2f_labels")" "$u2f_id_a"$'\t''Spare key'
+
+fido2-token() {
+    printf '%s\n' \
+        '/dev/hidraw0: vendor=0x1ea8, product=0xf829 (Thetis Security Key(F829))' \
+        'pcsc://slot0: vendor=0x076b, product=0x5422 (HID Global OMNIKEY 5422)' \
+        '/dev/hidraw3: vendor=0x0483, product=0x5741 (Flipper Devices Inc. U2F Token)' \
+        '/dev/hidraw12: vendor=0x1050, product=0x0407 ( )'
+}
+u2f_detect_keys
+assert_eq "${U2F_DEVICES[*]}" 'hidraw0 hidraw3 hidraw12'
+assert_eq "$(printf '%s|' "${U2F_DEVICE_NAMES[@]}")" \
+    'Thetis Security Key(F829)|Flipper Devices Inc. U2F Token|FIDO2 device|'
+u2f_select_device /dev/hidraw3
+assert_eq "$U2F_DEVICE/$U2F_DEVICE_NAME" 'hidraw3/Flipper Devices Inc. U2F Token'
+for u2f_bad_device in '' hidraw9 'hidraw3;x' ../hidraw3; do
+    if (u2f_select_device "$u2f_bad_device") 2>/dev/null; then
+        fail "selected an ambiguous or unconnected authenticator: '$u2f_bad_device'"
+    fi
+done
+fido2-token() { printf '%s\n' '/dev/hidraw5: vendor=0x1, product=0x2 (Solo Key)'; }
+u2f_select_device ''
+assert_eq "$U2F_DEVICE/$U2F_DEVICE_NAME" 'hidraw5/Solo Key'
+unset -f fido2-token
+
+# fido2-cred -V prints the credential id and a PEM key; pam_u2f wants the
+# es256 key as raw X||Y, the point openssl prints without its 0x04 tag.
+u2f_ec_key="$TEST_DIR/u2f-ec.pem"
+u2f_verified="$TEST_DIR/u2f-verified"
+u2f_cred_id='q83vEjRWeJA+/w=='
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$u2f_ec_key" 2>/dev/null
+{ printf '%s\n' "$u2f_cred_id"; openssl pkey -in "$u2f_ec_key" -pubout; } >"$u2f_verified"
+u2f_point=$(openssl ec -in "$u2f_ec_key" -noout -text 2>/dev/null |
+    sed -n '/^pub:/,/^ASN1 OID/{/^ /p}' | tr -d ' :\n')
+[[ "$u2f_point" =~ ^04[0-9a-f]{128}$ ]] || fail "unexpected openssl point dump: $u2f_point"
+u2f_converted=$(u2f_credential_from_verified "$u2f_verified")
+IFS=, read -r u2f_conv_id u2f_conv_key u2f_conv_type u2f_conv_attrs <<<"$u2f_converted"
+assert_eq "$u2f_conv_id,$u2f_conv_type,$u2f_conv_attrs" "$u2f_cred_id,es256,+presence"
+assert_eq "$(base64 -d <<<"$u2f_conv_key" | wc -c)" 64
+assert_eq "$(base64 -d <<<"$u2f_conv_key" | od -An -v -tx1 | tr -d ' \n')" "${u2f_point#04}"
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -out "$u2f_ec_key" 2>/dev/null
+{ printf '%s\n' "$u2f_cred_id"; openssl pkey -in "$u2f_ec_key" -pubout; } >"$u2f_verified"
+if u2f_credential_from_verified "$u2f_verified" >/dev/null; then
+    fail 'converted a non-P-256 key to an es256 credential'
+fi
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$u2f_ec_key" 2>/dev/null
+{ printf '%s\n' 'q83v:EjRW'; openssl pkey -in "$u2f_ec_key" -pubout; } >"$u2f_verified"
+if u2f_credential_from_verified "$u2f_verified" >/dev/null; then
+    fail 'accepted a credential id that would split the mapping line'
 fi
 
 snapshot_available() { return 0; }

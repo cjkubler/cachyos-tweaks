@@ -130,6 +130,18 @@ that service as the enrolled account, so they never traverse sudo’s own U2F
 stack and request one key approval. Existing enrollments install the service
 once through the privileged backend; subsequent tests are unprivileged.
 
+Registration targets one device chosen from `fido2-token -L`, so any number
+of authenticators may be connected. `fido2-cred` makes and verifies the
+credential; the suite converts its PEM key to the raw es256 point that pam_u2f
+reads.
+
+The enrolled user's line in the key mapping is the only record of which
+authenticators exist. Each key's ID is the first 12 hex digits of the SHA-256
+of its credential, so IDs stay stable across additions and removals. Display
+labels live in a world-readable `key-labels` file in the module state
+directory, because the listing runs unprivileged and tweak notes are
+root-only.
+
 All operations remain staged in the frontend until confirmation. A batch is
 newline-delimited `module<TAB>id<TAB>on|off` and is wrapped in one snapper
 pre/post pair when available. Inputs needed by a staged operation, such as the

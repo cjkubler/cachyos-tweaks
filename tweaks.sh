@@ -6,7 +6,8 @@
 # and the change summary confirmed.
 # Subcommands for scripting:
 #   tweaks.sh status
-#   tweaks.sh u2f enroll | unenroll
+#   tweaks.sh u2f enroll [DEVICE] | unenroll
+#   tweaks.sh u2f keys | add-key [DEVICE] | remove-key ID
 #   tweaks.sh u2f enable|disable SERVICE [--force]
 #   tweaks.sh <module> list
 #   tweaks.sh <module> apply|revert TWEAK [--force]
@@ -54,8 +55,11 @@ snapper pre/post snapshot pair when snapshots are configured.
 
 Commands:
   status                        Show everything at a glance
-  u2f enroll                    Enroll a connected FIDO2/U2F authenticator
-  u2f unenroll                  Remove the enrollment (all services must be off)
+  u2f enroll [DEVICE]           Enroll an authenticator (hidrawN; optional if only one)
+  u2f unenroll                  Remove the enrollment and every key (all services must be off)
+  u2f keys                      List enrolled authenticators by ID
+  u2f add-key [DEVICE]          Enroll one more authenticator (hidrawN; optional if only one)
+  u2f remove-key ID             Remove one of several enrolled authenticators
   u2f enable SERVICE            Enable U2F for one service
   u2f disable SERVICE [--force] Disable U2F for one service
   MODULE list                   List a module's tweaks (${TWEAK_MODULES[*]})
@@ -95,19 +99,32 @@ declare -a EX_IDS=() EX_LABELS=() EX_DESC=() EX_DISABLED=() EX_CAPTURE=() EX_PRI
 # ---------------------------------------------------------------------------
 
 U2F_CACHED_ENROLLED=0
-U2F_KEY_OK=0
+U2F_MAPPING_MANAGED=0
 U2F_DEV_DESC=''
+U2F_KEY_IDS=()
+U2F_KEY_NAMES=()
 
 u2f_tg_build() {
-    local service status desc
+    local service status desc id label name enrolled='none enrolled' connected=''
     TG_IDS=() TG_LABELS=() TG_STATUS=() TG_DESC=() TG_CATEGORIES=()
-    if u2f_enrolled; then U2F_CACHED_ENROLLED=1; else U2F_CACHED_ENROLLED=0; fi
-    if u2f_key_present; then
-        U2F_KEY_OK=1
-        U2F_DEV_DESC="Authenticator: ${U2F_KEY_LINE} — connected."
+    U2F_CACHED_ENROLLED=0 U2F_MAPPING_MANAGED=0 U2F_KEY_IDS=() U2F_KEY_NAMES=()
+    if u2f_enrolled; then
+        U2F_CACHED_ENROLLED=1
+        [[ $(managed_file_status "$U2F_ID" "$U2F_MAPPING") != on ]] || U2F_MAPPING_MANAGED=1
+        while IFS=$'\t' read -r id label; do
+            U2F_KEY_IDS+=("$id")
+            U2F_KEY_NAMES+=("$label")
+        done < <(u2f_keys)
+        enrolled="${#U2F_KEY_IDS[@]} of $U2F_MAX_KEYS enrolled"
+    fi
+    u2f_detect_keys
+    for name in "${U2F_DEVICE_NAMES[@]}"; do
+        connected+=${connected:+, }$name
+    done
+    if (( ${#U2F_DEVICES[@]} )); then
+        U2F_DEV_DESC="Authenticators: $enrolled, ${#U2F_DEVICES[@]} connected ($connected)."
     else
-        U2F_KEY_OK=0
-        U2F_DEV_DESC='Authenticator: none detected — connect it for enrollment or tests.'
+        U2F_DEV_DESC="Authenticators: $enrolled, none connected."
     fi
     for service in "${U2F_SERVICES[@]}"; do
         status=$(u2f_service_status "$service")
@@ -129,6 +146,7 @@ u2f_tg_build() {
         if (( ! U2F_CACHED_ENROLLED )); then
             desc+='No authenticator is enrolled yet: applying an enable runs'$'\n'
             desc+='enrollment first (two approvals on the key, isolated PAM test).'$'\n'
+            desc+='With several keys connected, pick one with its Enroll action first.'$'\n'
         fi
         TG_DESC+=("$desc")
     done
@@ -143,29 +161,90 @@ u2f_tg_toggleable() {
     return 0
 }
 
+# Append one ACTION-hidrawN row ("TITLE: device") per connected
+# authenticator, or one disabled ACTION row (NONE_LABEL) when none is
+# connected. A non-empty REASON disables every row.
+u2f_device_extras() {
+    local action=$1 title=$2 none_label=$3 body=$4 reason=$5 i name other matches desc
+    if (( ! ${#U2F_DEVICES[@]} )); then
+        if [[ -z "$reason" ]]; then
+            reason='connect a FIDO2/U2F authenticator.'
+            command -v fido2-token >/dev/null 2>&1 ||
+                reason='install libfido2 to detect authenticators.'
+        fi
+        EX_IDS+=("$action"); EX_LABELS+=("$none_label"); EX_CAPTURE+=(0); EX_PRIVILEGED+=(1)
+        EX_DISABLED+=(1)
+        EX_DESC+=("$U2F_DEV_DESC"$'\n\n'"$body"$'\n\n'"${C_YELLOW}Disabled: $reason${C_RESET}")
+        return
+    fi
+    for i in "${!U2F_DEVICES[@]}"; do
+        name=${U2F_DEVICE_NAMES[i]} matches=0
+        for other in "${U2F_DEVICE_NAMES[@]}"; do
+            [[ "$other" != "$name" ]] || matches=$((matches + 1))
+        done
+        (( matches == 1 )) || name+=" (${U2F_DEVICES[i]})"
+        EX_IDS+=("$action-${U2F_DEVICES[i]}"); EX_LABELS+=("$title: $name")
+        EX_CAPTURE+=(0); EX_PRIVILEGED+=(1)
+        desc="$U2F_DEV_DESC"$'\n\n'"Device: ${U2F_DEVICE_NAMES[i]} (/dev/${U2F_DEVICES[i]})"$'\n'"$body"
+        if [[ -n "$reason" ]]; then
+            EX_DISABLED+=(1); desc+=$'\n\n'"${C_YELLOW}Disabled: $reason${C_RESET}"
+        else
+            EX_DISABLED+=(0)
+        fi
+        EX_DESC+=("$desc")
+    done
+}
+
 u2f_tg_extra_build() {
-    local i all_off=1
+    local i desc reason='' all_off=1 count=${#U2F_KEY_IDS[@]}
+    local unmanaged="$U2F_MAPPING was not enrolled by this suite or was edited since; edit it manually or re-enroll."
     for i in "${!TG_STATUS[@]}"; do
         [[ "${TG_STATUS[i]}" == off ]] || all_off=0
     done
     if (( ! U2F_CACHED_ENROLLED )); then
-        EX_IDS+=(enroll); EX_LABELS+=('Enroll an authenticator'); EX_CAPTURE+=(0); EX_PRIVILEGED+=(1)
-        if (( U2F_KEY_OK )); then EX_DISABLED+=(0); else EX_DISABLED+=(1); fi
-        EX_DESC+=("$U2F_DEV_DESC"$'\n\n''Enroll the connected FIDO2/U2F authenticator for your account.'$'\n''You approve twice: once to register the key and once for an'$'\n''isolated PAM test. No live login files are touched by this step.')
+        u2f_device_extras enroll Enroll 'Enroll an authenticator' \
+            'Register this authenticator for your account. You approve twice:'$'\n''once to register the key and once for an isolated PAM test. No live'$'\n''login files are touched by this step.' ''
     else
         # Output-only from the terminal's perspective: the interaction is a
         # touch on the key, so the Charm TUI can run it captured.
         EX_IDS+=(test); EX_LABELS+=('Test the authenticator now'); EX_CAPTURE+=(1)
         if u2f_test_service_ready; then EX_PRIVILEGED+=(0); else EX_PRIVILEGED+=(1); fi
-        if (( U2F_KEY_OK )); then EX_DISABLED+=(0); else EX_DISABLED+=(1); fi
-        EX_DESC+=("$U2F_DEV_DESC"$'\n\n''Run the enrolled credential against an isolated, U2F-only PAM'$'\n''stack (the same test enrollment uses). Approve on the key once when'$'\n''prompted. Existing enrollments may need a one-time service setup; after'$'\n''that, tests run without administrator access.')
-        EX_IDS+=(unenroll); EX_LABELS+=('Remove enrollment'); EX_CAPTURE+=(0); EX_PRIVILEGED+=(1)
-        if (( all_off )); then EX_DISABLED+=(0); else EX_DISABLED+=(1); fi
-        if (( all_off )); then
-            EX_DESC+=("Remove the U2F key mapping ($U2F_MAPPING)."$'\n\n''Also uninstalls pam-u2f if this suite installed it.')
-        else
-            EX_DESC+=("Remove the U2F key mapping ($U2F_MAPPING)."$'\n\n'"${C_YELLOW}Disabled: turn U2F off for every service first.${C_RESET}")
+        if (( ${#U2F_DEVICES[@]} )); then EX_DISABLED+=(0); else EX_DISABLED+=(1); fi
+        EX_DESC+=("$U2F_DEV_DESC"$'\n\n''Run the enrolled credentials against an isolated, U2F-only PAM'$'\n''stack (the same test enrollment uses). Approve once on any enrolled'$'\n''key when prompted. Existing enrollments may need a one-time service'$'\n''setup; after that, tests run without administrator access.')
+
+        if (( ! U2F_MAPPING_MANAGED )); then
+            reason=$unmanaged
+        elif (( count >= U2F_MAX_KEYS )); then
+            reason="$U2F_MAX_KEYS authenticators are already enrolled."
         fi
+        u2f_device_extras add-key 'Add authenticator' 'Add another authenticator' \
+            "Enroll this authenticator as one more key ($count of $U2F_MAX_KEYS used;"$'\n''pam_u2f reads no more). You approve twice: once to register it and'$'\n''once for an isolated PAM test. Any enrolled key then works for every'$'\n''enabled service.' "$reason"
+
+        for i in "${!U2F_KEY_IDS[@]}"; do
+            EX_IDS+=("remove-key-${U2F_KEY_IDS[i]}"); EX_LABELS+=("Remove authenticator: ${U2F_KEY_NAMES[i]}")
+            EX_CAPTURE+=(0); EX_PRIVILEGED+=(1)
+            if (( count == 1 )); then
+                EX_DISABLED+=(1)
+                EX_DESC+=("Enrolled authenticator ID ${U2F_KEY_IDS[i]} in $U2F_MAPPING."$'\n\n'"${C_YELLOW}Only enrolled authenticator; use Remove enrollment.${C_RESET}")
+                continue
+            fi
+            desc="Remove this authenticator (ID ${U2F_KEY_IDS[i]}) from $U2F_MAPPING."$'\n'"Authenticators left for every enabled service: $((count - 1)) of $U2F_MAX_KEYS."
+            if (( U2F_MAPPING_MANAGED )); then
+                EX_DISABLED+=(0)
+            else
+                EX_DISABLED+=(1); desc+=$'\n\n'"${C_YELLOW}Disabled: $unmanaged${C_RESET}"
+            fi
+            EX_DESC+=("$desc")
+        done
+
+        EX_IDS+=(unenroll); EX_LABELS+=('Remove enrollment'); EX_CAPTURE+=(0); EX_PRIVILEGED+=(1)
+        desc="Remove every enrolled authenticator ($count) and the U2F key mapping"$'\n'"($U2F_MAPPING)."
+        if (( all_off )); then
+            EX_DISABLED+=(0); desc+=$'\n\n''Also uninstalls pam-u2f if this suite installed it.'
+        else
+            EX_DISABLED+=(1); desc+=$'\n\n'"${C_YELLOW}Disabled: turn U2F off for every service first.${C_RESET}"
+        fi
+        EX_DESC+=("$desc")
     fi
 }
 
@@ -186,11 +265,12 @@ u2f_tg_extra_run() {
     fi
     local rc=0 action_rc
     set +e
-    if [[ "$action" == enroll ]]; then
-        run_failfast u2f_enroll
-    else
-        run_failfast u2f_remove_enrollment
-    fi
+    case $action in
+        enroll-*)     run_failfast u2f_enroll "${action#enroll-}" ;;
+        add-key-*)    run_failfast u2f_add_key "${action#add-key-}" ;;
+        remove-key-*) run_failfast u2f_remove_key "${action#remove-key-}" ;;
+        unenroll)     run_failfast u2f_remove_enrollment ;;
+    esac
     action_rc=$?
     set -e
     (( action_rc == 0 )) || rc=1
@@ -375,6 +455,18 @@ batch_execute() {
     done
     (( ${#mods[@]} )) || die 'batch: no operations on stdin'
 
+    local need_enroll=0
+    for i in "${!mods[@]}"; do
+        [[ "${mods[i]}" == u2f && "${tos[i]}" == on ]] && need_enroll=1
+    done
+    if (( need_enroll )) && ! u2f_enrolled; then
+        # Choose the authenticator before the snapshot so an ambiguous choice
+        # changes nothing.
+        u2f_select_device ''
+    else
+        need_enroll=0
+    fi
+
     if snapshot_available; then
         if snapshot_pre 'Tweaks for CachyOS: before applying staged changes'; then
             msg "Snapper pre snapshot #$SNAPSHOT_PRE_NUM created."
@@ -384,14 +476,10 @@ batch_execute() {
             return 1
         fi
     fi
-    local need_enroll=0
-    for i in "${!mods[@]}"; do
-        [[ "${mods[i]}" == u2f && "${tos[i]}" == on ]] && need_enroll=1
-    done
-    if (( need_enroll )) && ! u2f_enrolled; then
+    if (( need_enroll )); then
         local enroll_rc
         set +e
-        run_failfast u2f_enroll
+        run_failfast u2f_enroll "$U2F_DEVICE"
         enroll_rc=$?
         set -e
         if (( enroll_rc != 0 )); then
@@ -591,8 +679,18 @@ case ${1:-} in
         ;;
     u2f)
         case ${2:-} in
-            enroll)   u2f_enroll ;;
+            enroll)   u2f_enroll "${3:-}" ;;
             unenroll) u2f_remove_enrollment ;;
+            keys)
+                u2f_keys | while IFS=$'\t' read -r id label; do
+                    printf '%s  %s\n' "$id" "$label"
+                done
+                ;;
+            add-key)  u2f_add_key "${3:-}" ;;
+            remove-key)
+                [[ -n "${3:-}" ]] || die "usage: $PROGRAM u2f remove-key ID (see: $PROGRAM u2f keys)"
+                u2f_remove_key "$3"
+                ;;
             enable|disable)
                 [[ -n "${3:-}" ]] || die "usage: $PROGRAM u2f $2 SERVICE"
                 ok=0
@@ -604,7 +702,7 @@ case ${1:-} in
                     u2f_disable_service "$3" "${4:-}"
                 fi
                 ;;
-            *) die "usage: $PROGRAM u2f enroll|unenroll|enable|disable ..." ;;
+            *) die "usage: $PROGRAM u2f enroll|unenroll|keys|add-key|remove-key|enable|disable ..." ;;
         esac
         ;;
     *)

@@ -132,13 +132,14 @@ func (m *Module) StagedCount() int {
 }
 
 // Enrollment state for the u2f module is encoded in which extras exist:
-// an "enroll" action is offered exactly while nothing is enrolled.
+// "enroll" (no device connected) or "enroll-hidrawN" actions are offered
+// exactly while nothing is enrolled.
 func (m *Module) U2FUnenrolled() bool {
 	if m.Name != "u2f" {
 		return false
 	}
 	for _, e := range m.Extras {
-		if e.ID == "enroll" {
+		if e.ID == "enroll" || strings.HasPrefix(e.ID, "enroll-") {
 			return true
 		}
 	}
